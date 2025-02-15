@@ -1,0 +1,60 @@
+{
+    "Cloud Coverage": [
+        {
+            "trait_description": "Sparse clouds",
+            "trait_value": "3",
+            "weight": 4000
+        },
+        {
+            "trait_description": "Moderate clouds",
+            "trait_value": "6",
+            "weight": 4000
+        },
+        {
+            "trait_description": "Dense clouds",
+            "trait_value": "10",
+            "weight": 2000
+        }
+    ],
+    "Lightning Intensity": [
+        {
+            "trait_description": "Subtle lightning",
+            "trait_value": "1",
+            "weight": 6000
+        },
+        {
+            "trait_description": "Moderate lightning",
+            "trait_value": "2",
+            "weight": 3000
+        },
+        {
+            "trait_description": "Intense lightning",
+            "trait_value": "3",
+            "weight": 1000
+        }
+    ],
+    "Rain Intensity": [
+        {
+            "trait_description": "Light rain",
+            "trait_value": "200",
+            "weight": 5000
+        },
+        {
+            "trait_description": "Moderate rain",
+            "trait_value": "400",
+            "weight": 3000
+        },
+        {
+            "trait_description": "Heavy rain",
+            "trait_value": "600",
+            "weight": 2000
+        }
+    ],
+    "Artist": [
+        {
+            "trait_description": "Creator of the piece",
+            "trait_value": "Longshot",
+            "weight": 10000
+        }
+    ]
+}

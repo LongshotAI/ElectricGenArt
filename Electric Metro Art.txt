@@ -1,0 +1,571 @@
+/**
+ * Enhanced Generative Artwork for 256ART
+ * Steps 1 & 2 Merged:
+ *  - Cloud coverage (from traits)
+ *  - Lightning intensity (from traits)
+ *  - Random color palettes & subtle flicker remain unchanged
+ */
+
+// ----------------------------------------------
+// 0) Example Trait JSON
+//    In practice, you'd parse minted token data here.
+let selectedTraits = {
+  cloudCoverage: 6,        // e.g. "Moderate" => 6
+  lightningIntensity: 2    // e.g. "Moderate lightning" => 2
+};
+
+// ---------------------------------------------------------------------------
+// 1) Random Class
+let R; // We'll instantiate in setup()
+
+class Random {
+  constructor() {
+    if (typeof inputData === 'undefined' || !inputData.hash) {
+      inputData = { hash: '0'.repeat(66) };
+      console.warn("inputData.hash is undefined. Using default hash.");
+    }
+
+    let offset = 0;
+    for (let i = 2; i < 66; i += 8) {
+      offset += parseInt(inputData.hash.substr(i, 8), 16);
+    }
+    offset %= 7;
+
+    const p = pos => parseInt(inputData.hash.substr(pos + offset, 8), 16);
+    let a = p(2) ^ p(34),
+        b = p(10) ^ p(42),
+        c = p(18) ^ p(50),
+        d = p(26) ^ p(58) ^ p(2 + (8 - offset));
+
+    this.r = () => {
+      a |= 0; b |= 0; c |= 0; d |= 0;
+      let t = (((a + b) | 0) + d) | 0;
+      d = (d + 1) | 0;
+      a = b ^ (b >>> 9);
+      b = (c + (c << 3)) | 0;
+      c = (c << 21) | (c >>> 11);
+      c = (c + t) | 0;
+      return (t >>> 0) / 4294967296;
+    };
+    for (let i = 0; i < 256; i++) this.r();
+  }
+  random_dec = () => this.r();
+  random_num = (a, b) => a + (b - a) * this.random_dec();
+  random_int = (a, b) => Math.floor(this.random_num(a, b + 1));
+  random_bool = p => this.random_dec() < p;
+  random_choice = list => list[this.random_int(0, list.length - 1)];
+}
+
+// ---------------------------------------------------------------------------
+// 2) Color Palettes
+const colorPalettes = [
+  {
+    name: "Warm Amber",
+    windowColors: ["#f7931a","#FFD597","#FFE9C6","#FFFACC","#F6CE8F"]
+  },
+  {
+    name: "Cool Azure",
+    windowColors: ["#7fd8f5","#b3ecff","#dff8ff","#c7f0ff","#91e8ff"]
+  },
+  {
+    name: "Cyberpunk Magenta",
+    windowColors: ["#ff007b","#ff66b3","#ffb3d9","#ffd9ec","#ff99cc"]
+  },
+  {
+    name: "Neo Green",
+    windowColors: ["#99ffbb","#66ff99","#ccffd9","#b3ffcc","#8dffb0"]
+  },
+  {
+    name: "Electric Violet",
+    windowColors: ["#a020f0","#c850ff","#e08aff","#f0d5ff","#b266ff"]
+  },
+  {
+    name: "BTC",
+    windowColors: ["#f7931a","#ffffff"]
+  },
+  {
+    name: "PPN",
+    windowColors: ["#ff0000","#00ff00","#0000ff"]
+  }
+];
+
+let chosenPalette;
+
+// ---------------------------------------------------------------------------
+// 3) Canvas Setup
+let canvas = document.createElement("canvas");
+let ctx = canvas.getContext("2d");
+document.body.appendChild(canvas);
+
+// Scene variables
+let buildings = [], cloudLayers = [], lightning = null, flashOpacity = 0;
+let streetlights = [], raindrops = [], stars = [];
+
+// Default values (may be overridden by traits)
+const NUM_BUILDINGS = 10;
+let NUM_CLOUD_LAYERS = 3;
+let NUM_CLOUDS = 6;
+let NUM_RAINDROPS = 400;
+let LIGHTNING_INTERVAL_MIN = 3000;
+let LIGHTNING_INTERVAL_MAX = 10000;
+
+let skyGradient, mistGradient;
+let lastFrameTime = performance.now ? performance.now() : Date.now();
+
+// ---------------------------------------------------------------------------
+// Step 1: Cloud Coverage
+function applyTraitJSON_forClouds(traits) {
+  const coverage = parseInt(traits.cloudCoverage || 6, 10);
+  // e.g. 3 => sparse, 6 => moderate, 10 => dense
+  if (coverage === 3) {
+    NUM_CLOUD_LAYERS = 1;
+    NUM_CLOUDS = 3;
+  } else if (coverage === 10) {
+    NUM_CLOUD_LAYERS = 3;
+    NUM_CLOUDS = 10;
+  } else {
+    NUM_CLOUD_LAYERS = 2;
+    NUM_CLOUDS = 6;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step 2: Lightning Intensity
+function applyTraitJSON_forLightning(traits) {
+  const li = parseInt(traits.lightningIntensity || 2, 10);
+  if (li === 1) {
+    // Subtle
+    LIGHTNING_INTERVAL_MIN = 6000;
+    LIGHTNING_INTERVAL_MAX = 15000;
+  } else if (li === 3) {
+    // Intense
+    LIGHTNING_INTERVAL_MIN = 2000;
+    LIGHTNING_INTERVAL_MAX = 8000;
+  } else {
+    // moderate
+    LIGHTNING_INTERVAL_MIN = 3000;
+    LIGHTNING_INTERVAL_MAX = 10000;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4) Setup & Resizing
+function setup() {
+  handleResize();
+  R = new Random();
+
+  // Step 1: Cloud coverage
+  applyTraitJSON_forClouds(selectedTraits);
+
+  // Step 2: Lightning intensity
+  applyTraitJSON_forLightning(selectedTraits);
+
+  // Pick a random palette
+  chosenPalette = colorPalettes[R.random_int(0, colorPalettes.length - 1)];
+
+  generateStars();
+  generateBuildings();
+  generateClouds();
+  generateStreetlights();
+  generateRaindrops();
+  precomputeGradients();
+  scheduleLightning();
+  draw();
+
+  window.addEventListener("resize", handleResize);
+}
+
+function handleResize() {
+  let dp = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dp;
+  canvas.height = window.innerHeight * dp;
+  precomputeGradients();
+}
+
+// ---------------------------------------------------------------------------
+// 5) Core Draw Loop
+function draw() {
+  let now = performance.now ? performance.now() : Date.now();
+  let deltaMs = now - lastFrameTime;
+  lastFrameTime = now;
+
+  // Sky
+  ctx.fillStyle = skyGradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawStars();
+  drawClouds();
+
+  updateFlickering(deltaMs);
+  drawBuildings();
+
+  drawStreetlights();
+  drawRaindrops();
+  drawMist();
+
+  if (lightning) lightning.draw();
+
+  if (flashOpacity > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${flashOpacity / 255})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    flashOpacity -= 3.75;
+  }
+
+  window.rendered = canvas;
+  requestAnimationFrame(draw);
+}
+
+// ---------------------------------------------------------------------------
+// 6) Flicker Logic
+function updateFlickering(deltaMs) {
+  for (let b of buildings) {
+    for (let row of b.windows) {
+      for (let w of row) {
+        if (w.state === "flicker") {
+          w.flickerTimer += deltaMs;
+          if (w.flickerTimer > w.flickerInterval) {
+            w.isFlickering = !w.isFlickering;
+            w.flickerTimer = 0;
+            w.flickerInterval = R.random_int(1500, 6000);
+          }
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7) Gradients, Stars, Clouds, Buildings, etc. 
+function precomputeGradients() {
+  skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  skyGradient.addColorStop(0, "#050a28");
+  skyGradient.addColorStop(0.3, "#1e3a8a");
+  skyGradient.addColorStop(0.6, "#27408b");
+  skyGradient.addColorStop(1, "#000");
+
+  const gradientHeight = 120;
+  const mistStart = canvas.height - gradientHeight;
+  mistGradient = ctx.createLinearGradient(0, mistStart, 0, canvas.height);
+  mistGradient.addColorStop(0, "rgba(255,255,255,0)");
+  mistGradient.addColorStop(0.3, "rgba(255,255,255,0.05)");
+  mistGradient.addColorStop(0.6, "rgba(255,255,255,0.1)");
+  mistGradient.addColorStop(1, "rgba(255,255,255,0.15)");
+}
+
+function generateStars() {
+  const starCount = 150;
+  for (let i = 0; i < starCount; i++) {
+    stars.push({
+      x: R.random_num(0, canvas.width),
+      y: R.random_num(0, canvas.height / 2),
+      radius: R.random_num(0.5, 1.5),
+      alpha: R.random_num(0.5, 1)
+    });
+  }
+}
+function drawStars() {
+  for (let star of stars) {
+    ctx.beginPath();
+    ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${star.alpha})`;
+    ctx.fill();
+  }
+}
+
+function generateClouds() {
+  for (let layer = 0; layer < NUM_CLOUD_LAYERS; layer++) {
+    let clouds = [];
+    const numCloudsActual = NUM_CLOUDS + layer * 2;
+    for (let i = 0; i < numCloudsActual; i++) {
+      const size = R.random_num(100, 200 - layer * 20);
+      const x = R.random_num(0, canvas.width);
+      const y = R.random_num(0, canvas.height / 3) + layer * 20;
+      const speed = (200 - size) / 100;
+      clouds.push({
+        x,
+        y,
+        size,
+        dithering: createDitheredCloud(size),
+        speed
+      });
+    }
+    cloudLayers.push(clouds);
+  }
+}
+function createDitheredCloud(size) {
+  const buffer = document.createElement("canvas");
+  buffer.width = size;
+  buffer.height = size / 2;
+  const bctx = buffer.getContext("2d");
+  bctx.fillStyle = "rgba(200,200,225,0.5)";
+
+  for (let xx = 0; xx < size; xx += 5) {
+    for (let yy = 0; yy < size / 2; yy += 5) {
+      if ((xx + yy) % 10 === 0) {
+        bctx.fillRect(xx, yy, 5, 5);
+      }
+    }
+  }
+  return buffer;
+}
+function drawClouds() {
+  for (let layer = 0; layer < cloudLayers.length; layer++) {
+    for (let cloud of cloudLayers[layer]) {
+      ctx.globalAlpha = 0.6 - layer * 0.15;
+      ctx.drawImage(cloud.dithering, cloud.x, cloud.y, cloud.size, cloud.size / 2);
+      cloud.x -= cloud.speed;
+      if (cloud.x < -cloud.size) {
+        cloud.x = canvas.width + cloud.size;
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Buildings
+function generateBuildings() {
+  const spacing = canvas.width / NUM_BUILDINGS;
+  for (let i = 0; i < NUM_BUILDINGS; i++) {
+    const x = i * spacing;
+    const w = R.random_num(spacing * 0.6, spacing * 0.9);
+    const h = R.random_num(canvas.height * 0.4, canvas.height * 0.8);
+    buildings.push({
+      x,
+      width: w,
+      height: h,
+      windows: assignWindows(h, w)
+    });
+  }
+}
+function assignWindows(h, w) {
+  const rows = Math.floor(h / 20);
+  const cols = Math.floor(w / 15);
+  let winRows = [];
+  for (let i = 0; i < rows; i++) {
+    let row = [];
+    for (let j = 0; j < cols; j++) {
+      let r = R.random_dec();
+      let state;
+      if (r < 0.2) {
+        state = "flicker";
+      } else if (r < 0.6) {
+        state = "on";
+      } else {
+        state = "off";
+      }
+
+      const color = (state !== "off")
+        ? R.random_choice(chosenPalette.windowColors)
+        : null;
+
+      row.push({
+        state,
+        color,
+        flickerTimer: 0,
+        flickerInterval: R.random_int(1500, 6000),
+        isFlickering: (state === "flicker" && R.random_bool(0.4))
+      });
+    }
+    winRows.push(row);
+  }
+  return winRows;
+}
+function drawBuildings() {
+  for (let b of buildings) {
+    ctx.fillStyle = "#1a1a1a";
+    ctx.fillRect(b.x, canvas.height - b.height, b.width, b.height);
+    drawWindows(b);
+  }
+}
+function drawWindows(building) {
+  for (let i = 0; i < building.windows.length; i++) {
+    for (let j = 0; j < building.windows[i].length; j++) {
+      const wObj = building.windows[i][j];
+      const winX = building.x + j * 15;
+      const winY = canvas.height - building.height + i * 20;
+
+      if (wObj.state === "on") {
+        ctx.fillStyle = wObj.color || "#f7931a";
+      } else if (wObj.state === "flicker") {
+        ctx.fillStyle = wObj.isFlickering
+          ? (wObj.color || "#ffd700")
+          : "#050505";
+      } else {
+        ctx.fillStyle = "#050505";
+      }
+      ctx.fillRect(winX, winY, 10, 15);
+
+      // Reflection highlight
+      ctx.fillStyle = "rgba(255,255,255,0.1)";
+      ctx.beginPath();
+      ctx.arc(winX + 5, winY + 5, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+// Streetlights
+function generateStreetlights() {
+  const spacing = canvas.width / 7;
+  for (let i = 0; i < 7; i++) {
+    streetlights.push({
+      x: i * spacing,
+      y: canvas.height - 60,
+      flicker: R.random_bool(0.3)
+    });
+  }
+}
+function drawStreetlights() {
+  for (let light of streetlights) {
+    ctx.fillStyle = "#808080";
+    ctx.fillRect(light.x - 2, canvas.height - 60, 4, 60);
+
+    ctx.fillStyle = "#ffc107";
+    ctx.beginPath();
+    ctx.arc(light.x, canvas.height - 60, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    const gradient = ctx.createRadialGradient(
+      light.x, canvas.height - 60, 0,
+      light.x, canvas.height - 60, 50
+    );
+    const isFlickering = light.flicker && R.random_bool(0.05);
+    gradient.addColorStop(
+      0,
+      isFlickering ? "rgba(255, 240, 200, 0.4)" : "rgba(255, 240, 200, 0.2)"
+    );
+    gradient.addColorStop(1, "rgba(255, 240, 200, 0)");
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(light.x, canvas.height - 60, 50, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// Raindrops
+function generateRaindrops() {
+  for (let i = 0; i < NUM_RAINDROPS; i++) {
+    raindrops.push({
+      x: R.random_num(0, canvas.width),
+      y: R.random_num(-canvas.height, 0),
+      speed: R.random_num(4, 10),
+      length: R.random_num(10, 20)
+    });
+  }
+}
+function drawRaindrops() {
+  ctx.strokeStyle = "#add8e6";
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = "round";
+  for (let drop of raindrops) {
+    ctx.beginPath();
+    ctx.moveTo(drop.x, drop.y);
+    ctx.lineTo(drop.x, drop.y + drop.length);
+    ctx.stroke();
+
+    drop.y += drop.speed;
+    if (drop.y > canvas.height) {
+      drop.y = R.random_num(-canvas.height, 0);
+    }
+  }
+}
+
+// Mist
+function drawMist() {
+  ctx.fillStyle = mistGradient;
+  ctx.fillRect(0, canvas.height - 120, canvas.width, 120);
+}
+
+// Lightning
+class Lightning {
+  constructor(intensity = 1) {
+    this.intensity = intensity;
+    this.reset();
+    this.strikeColor = this.getStrikeColor();
+  }
+  getStrikeColor() {
+    if (this.intensity === 1)   return "rgba(255,255,255,0.9)";
+    if (this.intensity === 1.5) return "rgba(255,220,220,0.9)";
+    return "rgba(255,200,200,0.9)";
+  }
+  reset() {
+    this.segments = [{ x: R.random_num(0, canvas.width), y: 0 }];
+    this.finished = false;
+    this.branchSegments = [];
+  }
+  draw() {
+    ctx.shadowBlur = 20 * this.intensity;
+    ctx.shadowColor = "rgba(255,255,255,0.8)";
+    ctx.lineWidth = 3 * this.intensity;
+
+    for (let i = 0; i < this.segments.length - 1; i++) {
+      const { x: x1, y: y1 } = this.segments[i];
+      const { x: x2, y: y2 } = this.segments[i + 1];
+      ctx.strokeStyle = this.strikeColor;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    for (let branch of this.branchSegments) {
+      for (let i = 0; i < branch.length - 1; i++) {
+        const { x: x1, y: y1 } = branch[i];
+        const { x: x2, y: y2 } = branch[i + 1];
+        ctx.strokeStyle = this.strikeColor;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+    }
+    ctx.shadowBlur = 0;
+
+    if (!this.finished) {
+      this.grow();
+    } else {
+      lightning = null;
+      flashOpacity = R.random_num(112.5, 165) * this.intensity;
+    }
+  }
+  grow() {
+    const last = this.segments[this.segments.length - 1];
+    if (last.y >= canvas.height) {
+      this.finished = true;
+      return;
+    }
+    const angleVariation = R.random_num(-20, 20) * this.intensity;
+    const radians = angleVariation * (Math.PI / 180);
+    const nextX = last.x + Math.sin(radians) * 15 * this.intensity;
+    const nextY = last.y + Math.cos(radians) * 20 * this.intensity;
+    this.segments.push({ x: nextX, y: nextY });
+
+    if (R.random_bool(0.2 * this.intensity)) {
+      this.createBranch(nextX, nextY);
+    }
+  }
+  createBranch(x, y) {
+    const branchLength = R.random_int(5, 15) * this.intensity;
+    let branchSegments = [{ x, y }];
+    for (let i = 0; i < branchLength; i++) {
+      const last = branchSegments[branchSegments.length - 1];
+      const angle = R.random_num(-30, 30);
+      const radians = angle * (Math.PI / 180);
+      const nextX = last.x + Math.sin(radians) * 10 * this.intensity;
+      const nextY = last.y + Math.cos(radians) * 15 * this.intensity;
+      branchSegments.push({ x: nextX, y: nextY });
+      if (nextY > canvas.height) break;
+    }
+    this.branchSegments.push(branchSegments);
+  }
+}
+
+// Lightning Scheduling
+function scheduleLightning() {
+  setTimeout(() => {
+    lightning = new Lightning(R.random_choice([1, 1.5, 2]));
+    scheduleLightning();
+  }, R.random_num(LIGHTNING_INTERVAL_MIN, LIGHTNING_INTERVAL_MAX));
+}
+
+// Finally, run setup
+setup();
